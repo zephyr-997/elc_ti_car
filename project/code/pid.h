@@ -23,11 +23,18 @@ typedef struct
 	float o_limit;//输出限幅
 } PID_t;
 
-extern PID_t SpeedPID, TurnPID;
+typedef struct
+{
+	float kp_s;
+	float ki_s;
+	float kd_s;
+	float kp_t;
+	float ki_t;
+	float kd_t;
+} pid_para;
 
-extern float speed_kp, speed_ki;
-extern float turn_kp, turn_kd;
-extern float angle_kp, angle_kd;
+extern PID_t SpeedPID, TurnPID;
+extern volatile pid_para pid_param[2];
 
 void pid_init(PID_t* pid, float kp, float ki, float kd, float i_limit, float o_limit);
 void pid_set(PID_t* pid, float kp, float ki, float kd);

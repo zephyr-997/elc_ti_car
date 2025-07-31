@@ -2,10 +2,8 @@
 
 PID_t SpeedPID; //速度PID
 PID_t TurnPID;  //位置PID
+volatile pid_para pid_param[2]; //串口控制参数 0-左轮 1-右轮
 
-float speed_kp = 55.0f, speed_ki = 0.12f;
-float turn_kp = 80.0f, turn_kd = 16.0f;
-float angle_kp = 80.0f, angle_kd = 18.0f;
 
 void pid_init(PID_t* pid, float kp, float ki, float kd, float i_limit, float o_limit)
 {

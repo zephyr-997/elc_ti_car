@@ -15,6 +15,7 @@
 #include "zf_common_headfile.h"
 #include <stdarg.h>
 #include <stdio.h>
+#include "pid.h"
 
 // 编码器参数配置
 #define ENCODER_PPR             13      // 编码器线数
@@ -51,6 +52,9 @@ typedef struct {
     volatile uint32 last_time;          // 上次时间戳
     moving_average_filter_t rpm_filter; // RPM滤波器
     moving_average_filter_t rps_filter; // RPS滤波器
+    volatile float target_rpm;          // 目标转速(RPM)
+    volatile float pid_output;          // 速度环PID输出值
+    volatile int16_t pwm_output;        // 最终PWM输出值
 } encoder_data_t;
 
 // 编码器索引
@@ -58,6 +62,20 @@ typedef enum {
     ENCODER_LEFT = 0,   // 左编码器
     ENCODER_RIGHT = 1   // 右编码器
 } encoder_index_t;
+
+// 电机索引（与编码器对应）
+typedef enum {
+    MOTOR_LEFT = 0,     // 左电机
+    MOTOR_RIGHT = 1     // 右电机
+} motor_index_t;
+
+// PWM控制参数
+#define MOTOR_PWM_MAX       1000    // 最大PWM值
+#define MOTOR_PWM_MIN      -1000    // 最小PWM值
+
+extern PID_t left_speed_pid;
+extern PID_t right_speed_pid;
+
 
 // 函数声明
 void encoder_init(void);
@@ -70,6 +88,26 @@ float encoder_get_filtered_rpm(encoder_index_t encoder);    // 获取滤波后RP
 float encoder_get_filtered_rps(encoder_index_t encoder);    // 获取滤波后RPS
 void encoder_clear_count(encoder_index_t encoder);
 void encoder_printf(const char *format, ...);
+
+// PID控制相关函数
+void encoder_set_target_rpm(encoder_index_t encoder, float target_rpm);    // 设置目标转速
+float encoder_get_target_rpm(encoder_index_t encoder);                     // 获取目标转速
+float encoder_get_pid_output(encoder_index_t encoder);                     // 获取速度环PID输出
+int16_t encoder_get_pwm_output(encoder_index_t encoder);                   // 获取PWM输出值
+void encoder_pid_enable(bool enable);                                      // 启用/禁用PID控制
+void encoder_pid_reset(encoder_index_t encoder);                           // 重置PID控制器
+void encoder_set_pid_mode(bool use_incremental);                           // 设置PID模式（位置式/增量式）
+
+
+
+// 转向环控制相关（预留）
+extern volatile float turn_pid_output;   
+                                  // 转向环PID输出
+void encoder_set_turn_output(float turn_output);                           // 设置转向环输出
+float encoder_get_turn_output(void);                                       // 获取转向环输出
+
+// 电机PWM控制接口（在motor.c中实现）
+void motor_set_pwm(motor_index_t motor, int16_t pwm_value);                // 设置电机PWM
 
 // 中断处理函数
 void encoder_gpio_handler(uint32 event, void *ptr);

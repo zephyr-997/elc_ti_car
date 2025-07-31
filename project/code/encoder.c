@@ -17,6 +17,15 @@
 static encoder_data_t encoder_data[2];
 static volatile bool encoder_initialized = false;
 static volatile bool timer_enabled = false;
+static volatile bool pid_enabled = false;
+static volatile bool use_incremental_pid = true;  // 默认使用增量式PID
+
+// PID控制器 - 左右轮速度控制
+PID_t left_speed_pid;
+PID_t right_speed_pid;
+
+// 转向环输出变量（预留）
+volatile float turn_pid_output = 0;
 
 // 状态转换表 - 四倍频解码
 // 格雷码序列: 00 -> 01 -> 11 -> 10 -> 00 (正转)
@@ -135,12 +144,13 @@ void encoder_gpio_handler(uint32 event, void *ptr)
 }
 
 //-------------------------------------------------------------------------------------------------------------------
-// 函数简介     编码器定时器中断处理 - 计算速度
+// 函数简介     编码器定时器中断处理 - 计算速度并执行PID控制
 // 参数说明     event           中断事件
 // 参数说明     ptr             回调参数指针
 //-------------------------------------------------------------------------------------------------------------------
 void encoder_timer_handler(uint32 event, void *ptr)
 {
+    float final_output = 0;
     int i = 0;
     (void)event;  // 未使用的参数
     (void)ptr;    // 未使用的参数
@@ -158,6 +168,63 @@ void encoder_timer_handler(uint32 event, void *ptr)
         // 应用递推均值滤波
         encoder_data[i].filtered_rpm = moving_average_update(&encoder_data[i].rpm_filter, encoder_data[i].speed_rpm);
         encoder_data[i].filtered_rps = moving_average_update(&encoder_data[i].rps_filter, encoder_data[i].speed_rps);
+
+        // PID控制逻辑
+        if(pid_enabled) {
+            if(i == ENCODER_LEFT) {
+                // 左轮PID控制
+                if(use_incremental_pid) {
+                    encoder_data[i].pid_output = pid_increment(&left_speed_pid,
+                                                             encoder_data[i].filtered_rpm,
+                                                             encoder_data[i].target_rpm);
+                } else {
+                    encoder_data[i].pid_output = pid_poisitional(&left_speed_pid,
+                                                               encoder_data[i].filtered_rpm,
+                                                               encoder_data[i].target_rpm);
+                }
+            } else {
+                // 右轮PID控制
+                if(use_incremental_pid) {
+                    encoder_data[i].pid_output = pid_increment(&right_speed_pid,
+                                                             encoder_data[i].filtered_rpm,
+                                                             encoder_data[i].target_rpm);
+                } else {
+                    encoder_data[i].pid_output = pid_poisitional(&right_speed_pid,
+                                                               encoder_data[i].filtered_rpm,
+                                                               encoder_data[i].target_rpm);
+                }
+            }
+        } else {
+            encoder_data[i].pid_output = 0.0f;
+        }
+
+        // PWM输出计算和控制
+        if(pid_enabled) {
+            final_output = encoder_data[i].pid_output;
+
+            // 如果是差速控制，需要叠加转向环输出
+            if(i == ENCODER_LEFT) {
+                final_output -= turn_pid_output;  // 左轮减去转向输出
+            } else {
+                final_output += turn_pid_output;  // 右轮加上转向输出
+            }
+
+            // PWM限幅
+            if(final_output > MOTOR_PWM_MAX) {
+                final_output = MOTOR_PWM_MAX;
+            } else if(final_output < MOTOR_PWM_MIN) {
+                final_output = MOTOR_PWM_MIN;
+            }
+
+            encoder_data[i].pwm_output = (int16_t)final_output;
+
+            // 输出PWM到电机
+            motor_set_pwm((motor_index_t)i, encoder_data[i].pwm_output);
+        } else {
+            // PID禁用时，停止电机
+            encoder_data[i].pwm_output = 0;
+            motor_set_pwm((motor_index_t)i, 0);
+        }
 
         // 重置计数器
         encoder_data[i].count = 0;
@@ -180,11 +247,21 @@ void encoder_init(void)
         encoder_data[i].filtered_rpm = 0.0f;
         encoder_data[i].filtered_rps = 0.0f;
         encoder_data[i].last_time = 0;
+        encoder_data[i].target_rpm = 0.0f;
+        encoder_data[i].pid_output = 0.0f;
+        encoder_data[i].pwm_output = 0;
 
         // 初始化滤波器
         moving_average_init(&encoder_data[i].rpm_filter);
         moving_average_init(&encoder_data[i].rps_filter);
     }
+
+    // 初始化PID控制器
+    // 左轮速度PID - 使用适中的参数
+    pid_init(&left_speed_pid, 10.0f, 0.0f, 0.0f, 100.0f, 1000.0f);
+
+    // 右轮速度PID - 使用适中的参数
+    pid_init(&right_speed_pid, 0.0f, 0.0f, 0.0f, 100.0f, 1000.0f);
 
     // 配置编码器引脚为输入，启用上拉
     gpio_init(ENCODER1_A_PIN, GPI, GPIO_HIGH, GPI_PULL_UP);
@@ -308,6 +385,118 @@ void encoder_clear_count(encoder_index_t encoder)
     if(encoder >= 2) return;
     encoder_data[encoder].count = 0;
 }
+
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介     设置目标转速
+// 参数说明     encoder         编码器索引
+// 参数说明     target_rpm      目标转速(RPM)
+//-------------------------------------------------------------------------------------------------------------------
+void encoder_set_target_rpm(encoder_index_t encoder, float target_rpm)
+{
+    if(encoder >= 2) return;
+    encoder_data[encoder].target_rpm = target_rpm;
+}
+
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介     获取目标转速
+// 参数说明     encoder         编码器索引
+// 返回参数     float           目标转速(RPM)
+//-------------------------------------------------------------------------------------------------------------------
+float encoder_get_target_rpm(encoder_index_t encoder)
+{
+    if(encoder >= 2) return 0.0f;
+    return encoder_data[encoder].target_rpm;
+}
+
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介     获取PID输出值
+// 参数说明     encoder         编码器索引
+// 返回参数     float           PID输出值
+//-------------------------------------------------------------------------------------------------------------------
+float encoder_get_pid_output(encoder_index_t encoder)
+{
+    if(encoder >= 2) return 0.0f;
+    return encoder_data[encoder].pid_output;
+}
+
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介     启用/禁用PID控制
+// 参数说明     enable          true:启用, false:禁用
+//-------------------------------------------------------------------------------------------------------------------
+void encoder_pid_enable(bool enable)
+{
+    pid_enabled = enable;
+    if(enable) {
+        encoder_printf("PID控制已启用\r\n");
+    } else {
+        encoder_printf("PID控制已禁用\r\n");
+    }
+}
+
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介     重置PID控制器
+// 参数说明     encoder         编码器索引
+//-------------------------------------------------------------------------------------------------------------------
+void encoder_pid_reset(encoder_index_t encoder)
+{
+    if(encoder >= 2) return;
+
+    if(encoder == ENCODER_LEFT) {
+        pid_clean(&left_speed_pid);
+    } else {
+        pid_clean(&right_speed_pid);
+    }
+
+    encoder_data[encoder].pid_output = 0.0f;
+    encoder_printf("编码器%d PID控制器已重置\r\n", encoder);
+}
+
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介     设置PID控制模式
+// 参数说明     use_incremental true:增量式PID, false:位置式PID
+//-------------------------------------------------------------------------------------------------------------------
+void encoder_set_pid_mode(bool use_incremental)
+{
+    use_incremental_pid = use_incremental;
+
+    // 切换模式时重置PID控制器
+    pid_clean(&left_speed_pid);
+    pid_clean(&right_speed_pid);
+
+    encoder_printf("PID控制模式设置为: %s\r\n",
+                   use_incremental ? "增量式" : "位置式");
+}
+
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介     获取PWM输出值
+// 参数说明     encoder         编码器索引
+// 返回参数     int16_t         PWM输出值
+//-------------------------------------------------------------------------------------------------------------------
+int16_t encoder_get_pwm_output(encoder_index_t encoder)
+{
+    if(encoder >= 2) return 0;
+    return encoder_data[encoder].pwm_output;
+}
+
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介     设置转向环输出
+// 参数说明     turn_output     转向环PID输出值
+//-------------------------------------------------------------------------------------------------------------------
+void encoder_set_turn_output(float turn_output)
+{
+    turn_pid_output = turn_output;
+}
+
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介     获取转向环输出
+// 返回参数     float           转向环PID输出值
+//-------------------------------------------------------------------------------------------------------------------
+float encoder_get_turn_output(void)
+{
+    return turn_pid_output;
+}
+
+// motor_set_pwm函数已在motor.c中实现
 
 //-------------------------------------------------------------------------------------------------------------------
 // 函数简介     编码器调试输出函数
