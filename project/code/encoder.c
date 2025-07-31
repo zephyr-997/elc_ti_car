@@ -53,6 +53,57 @@ static uint8_t encoder_read_pins(encoder_index_t encoder)
 // 参数说明     encoder         编码器索引
 // 参数说明     current_state   当前状态
 //-------------------------------------------------------------------------------------------------------------------
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介     递推均值滤波器初始化
+// 参数说明     filter          滤波器指针
+//-------------------------------------------------------------------------------------------------------------------
+static void moving_average_init(moving_average_filter_t *filter)
+{
+    int i = 0;
+    for(i = 0; i < FILTER_WINDOW_SIZE; i++) {
+        filter->buffer[i] = 0.0f;
+    }
+    filter->index = 0;
+    filter->sum = 0.0f;
+    filter->is_full = false;
+}
+
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介     递推均值滤波器更新
+// 参数说明     filter          滤波器指针
+// 参数说明     new_value       新的输入值
+// 返回参数     float           滤波后的值
+//-------------------------------------------------------------------------------------------------------------------
+static float moving_average_update(moving_average_filter_t *filter, float new_value)
+{
+#if FILTER_ENABLE
+    // 移除旧值（如果缓冲区已满）
+    if(filter->is_full) {
+        filter->sum -= filter->buffer[filter->index];
+    }
+
+    // 添加新值
+    filter->buffer[filter->index] = new_value;
+    filter->sum += new_value;
+
+    // 更新索引
+    filter->index = (filter->index + 1) % FILTER_WINDOW_SIZE;
+
+    // 检查缓冲区是否已满
+    if(!filter->is_full && filter->index == 0) {
+        filter->is_full = true;
+    }
+
+    // 计算平均值
+    uint8_t count = filter->is_full ? FILTER_WINDOW_SIZE : filter->index;
+    return (count > 0) ? (filter->sum / count) : 0.0f;
+#else
+    // 滤波禁用时直接返回原值
+    (void)filter;
+    return new_value;
+#endif
+}
+
 static void encoder_process_state(encoder_index_t encoder, uint8_t current_state)
 {
     uint8_t last_state = encoder_data[encoder].last_state;
@@ -90,18 +141,23 @@ void encoder_gpio_handler(uint32 event, void *ptr)
 //-------------------------------------------------------------------------------------------------------------------
 void encoder_timer_handler(uint32 event, void *ptr)
 {
+    int i = 0;
     (void)event;  // 未使用的参数
     (void)ptr;    // 未使用的参数
 
     if(!timer_enabled) return;
 
-    for(int i = 0; i < 2; i++) {
-        // 计算转速(RPM)
+    for(i = 0; i < 2; i++) {
+        // 计算原始转速(RPM)
         // 公式: RPM = (脉冲数 / (有效PPR * 4)) * (60000 / 采样周期ms)
         encoder_data[i].speed_rpm = (float)encoder_data[i].count / (EFFECTIVE_PPR * 4.0f) * (60000.0f / SAMPLE_PERIOD_MS);
 
-        // 计算转速(RPS)
+        // 计算原始转速(RPS)
         encoder_data[i].speed_rps = encoder_data[i].speed_rpm / 60.0f;
+
+        // 应用递推均值滤波
+        encoder_data[i].filtered_rpm = moving_average_update(&encoder_data[i].rpm_filter, encoder_data[i].speed_rpm);
+        encoder_data[i].filtered_rps = moving_average_update(&encoder_data[i].rps_filter, encoder_data[i].speed_rps);
 
         // 重置计数器
         encoder_data[i].count = 0;
@@ -121,7 +177,13 @@ void encoder_init(void)
         encoder_data[i].last_state = 0;
         encoder_data[i].speed_rpm = 0.0f;
         encoder_data[i].speed_rps = 0.0f;
+        encoder_data[i].filtered_rpm = 0.0f;
+        encoder_data[i].filtered_rps = 0.0f;
         encoder_data[i].last_time = 0;
+
+        // 初始化滤波器
+        moving_average_init(&encoder_data[i].rpm_filter);
+        moving_average_init(&encoder_data[i].rps_filter);
     }
 
     // 配置编码器引脚为输入，启用上拉
@@ -149,6 +211,11 @@ void encoder_init(void)
     encoder_printf("编码器线数: %d, 减速比: 1:%d\r\n", ENCODER_PPR, GEAR_RATIO);
     encoder_printf("有效分辨率: %d 脉冲/转\r\n", EFFECTIVE_PPR * 4);
     encoder_printf("采样周期: %d ms\r\n", SAMPLE_PERIOD_MS);
+#if FILTER_ENABLE
+    encoder_printf("递推均值滤波: 启用, 窗口大小: %d\r\n", FILTER_WINDOW_SIZE);
+#else
+    encoder_printf("递推均值滤波: 禁用\r\n");
+#endif
 }
 
 //-------------------------------------------------------------------------------------------------------------------
@@ -208,6 +275,28 @@ float encoder_get_speed_rps(encoder_index_t encoder)
 {
     if(encoder >= 2) return 0.0f;
     return encoder_data[encoder].speed_rps;
+}
+
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介     获取编码器滤波后转速(RPM)
+// 参数说明     encoder         编码器索引
+// 返回参数     float           滤波后转速(RPM)
+//-------------------------------------------------------------------------------------------------------------------
+float encoder_get_filtered_rpm(encoder_index_t encoder)
+{
+    if(encoder >= 2) return 0.0f;
+    return encoder_data[encoder].filtered_rpm;
+}
+
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介     获取编码器滤波后转速(RPS)
+// 参数说明     encoder         编码器索引
+// 返回参数     float           滤波后转速(RPS)
+//-------------------------------------------------------------------------------------------------------------------
+float encoder_get_filtered_rps(encoder_index_t encoder)
+{
+    if(encoder >= 2) return 0.0f;
+    return encoder_data[encoder].filtered_rps;
 }
 
 //-------------------------------------------------------------------------------------------------------------------

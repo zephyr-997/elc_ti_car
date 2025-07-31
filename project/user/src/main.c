@@ -46,17 +46,18 @@ int main (void)
     char uart_buffer[200];
     int32_t left_count = 0;
     int32_t right_count;
-    float left_rpm = 0.0f;
-    float right_rpm = 0.0f;
-    float left_rps = 0.0f;
-    float right_rps = 0.0f;
+    float left_rpm_raw = 0.0f;
+    float right_rpm_raw = 0.0f;
+    float left_rpm_filtered = 0.0f;
+    float right_rpm_filtered = 0.0f;
+
     clock_init(SYSTEM_CLOCK_80M);   // 时钟配置及系统初始化<务必保留>
 //    debug_init();					// 调试串口信息初始化
 	// 此处编写用户代码 例如外设初始化代码等
     uart_init(UART_0, 115200, UART0_TX_A10, UART0_RX_A11);
     gpio_init(B22, GPO, 1, GPO_PUSH_PULL);
-    // 初始化编码器
 
+    // 初始化编码器
     encoder_init();
     // 启动编码器
     encoder_start();
@@ -68,27 +69,24 @@ int main (void)
     while(true)
     {
         gpio_toggle_level(B22);
-        left_count = encoder_get_count(ENCODER_LEFT);
-        right_count = encoder_get_count(ENCODER_RIGHT);
+        left_rpm_raw = encoder_get_speed_rpm(ENCODER_LEFT);
+        right_rpm_raw = encoder_get_speed_rpm(ENCODER_RIGHT);
         
-        left_rpm = encoder_get_speed_rpm(ENCODER_LEFT);
-        right_rpm = encoder_get_speed_rpm(ENCODER_RIGHT);
+        // 读取滤波后数据
+        left_rpm_filtered = encoder_get_filtered_rpm(ENCODER_LEFT);
+        right_rpm_filtered = encoder_get_filtered_rpm(ENCODER_RIGHT);
         
-        left_rps = encoder_get_speed_rps(ENCODER_LEFT);
-        right_rps = encoder_get_speed_rps(ENCODER_RIGHT);
-        
-        // 格式化输出
+        // 输出对比数据
         sprintf(uart_buffer, 
-            "左编码器: 计数=%d, 转速=%.2f RPM, %.2f RPS\r\n"
-            "右编码器: 计数=%d, 转速=%.2f RPM, %.2f RPS\r\n"
+            "左轮 - 原始: %.2f RPM, 滤波: %.2f RPM\r\n"
+            "右轮 - 原始: %.2f RPM, 滤波: %.2f RPM\r\n"
             "----------------------------------------\r\n",
-            left_count, left_rpm, left_rps,
-            right_count, right_rpm, right_rps);
+            left_rpm_raw, left_rpm_filtered,
+            right_rpm_raw, right_rpm_filtered);
         
         uart_write_string(UART_0, uart_buffer);
         
-        // 延时1秒
-        system_delay_ms(1000);
+        system_delay_ms(500);
     }
 }
 
