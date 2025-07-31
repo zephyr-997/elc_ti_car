@@ -30,6 +30,7 @@
 ********************************************************************************************************************/
 
 #include "zf_common_headfile.h"
+#include "encoder.h"
 // 打开新的工程或者工程移动了位置务必执行以下操作
 // 第一步 关闭上面所有打开的文件
 // 第二步 project->clean  等待下方进度条走完
@@ -42,13 +43,23 @@
 
 int main (void)
 {
-    char uart_buffer[100];
-	
+    char uart_buffer[200];
+    int32_t left_count = 0;
+    int32_t right_count;
+    float left_rpm = 0.0f;
+    float right_rpm = 0.0f;
+    float left_rps = 0.0f;
+    float right_rps = 0.0f;
     clock_init(SYSTEM_CLOCK_80M);   // 时钟配置及系统初始化<务必保留>
 //    debug_init();					// 调试串口信息初始化
 	// 此处编写用户代码 例如外设初始化代码等
     uart_init(UART_0, 115200, UART0_TX_A10, UART0_RX_A11);
     gpio_init(B22, GPO, 1, GPO_PUSH_PULL);
+    // 初始化编码器
+
+    encoder_init();
+    // 启动编码器
+    encoder_start();
 
     system_delay_ms(500);
 	
@@ -56,14 +67,28 @@ int main (void)
     // 此处编写用户代码 例如外设初始化代码等
     while(true)
     {
-        // 此处编写需要循环执行的代码
         gpio_toggle_level(B22);
-        sprintf(uart_buffer, "hello\r\n");
-        uart_write_string(UART_0, uart_buffer);
-
+        left_count = encoder_get_count(ENCODER_LEFT);
+        right_count = encoder_get_count(ENCODER_RIGHT);
         
+        left_rpm = encoder_get_speed_rpm(ENCODER_LEFT);
+        right_rpm = encoder_get_speed_rpm(ENCODER_RIGHT);
+        
+        left_rps = encoder_get_speed_rps(ENCODER_LEFT);
+        right_rps = encoder_get_speed_rps(ENCODER_RIGHT);
+        
+        // 格式化输出
+        sprintf(uart_buffer, 
+            "左编码器: 计数=%d, 转速=%.2f RPM, %.2f RPS\r\n"
+            "右编码器: 计数=%d, 转速=%.2f RPM, %.2f RPS\r\n"
+            "----------------------------------------\r\n",
+            left_count, left_rpm, left_rps,
+            right_count, right_rpm, right_rps);
+        
+        uart_write_string(UART_0, uart_buffer);
+        
+        // 延时1秒
         system_delay_ms(1000);
-        // 此处编写需要循环执行的代码
     }
 }
 
